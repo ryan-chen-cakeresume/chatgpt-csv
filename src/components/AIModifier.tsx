@@ -9,8 +9,11 @@ interface CSVData {
   headers: string[];
 }
 
+// AI返回值結構，由AI自行判斷是否需要修改數據
 const AIReturnValue = z.object({
-  table: z.array(z.array(z.string())),
+  needsModification: z.boolean(), // 是否需要修改數據（由AI判斷）
+  message: z.string(), // 檢查結果或分析信息
+  table: z.array(z.array(z.string())), // 數據表格（原始或修改後）
 });
 
 interface AIModifierProps {
@@ -25,6 +28,7 @@ const AIModifier: React.FC<AIModifierProps> = ({ csvData, onDataUpdate }) => {
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [showApiKeyInput, setShowApiKeyInput] = useState<boolean>(false);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
+  const [analysisResult, setAnalysisResult] = useState<string>(""); // 儲存AI分析結果
 
   const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setPrompt(e.target.value);
@@ -68,6 +72,7 @@ const AIModifier: React.FC<AIModifierProps> = ({ csvData, onDataUpdate }) => {
     }
 
     setIsProcessing(true);
+    setAnalysisResult(""); // 清除先前的分析結果
     toast.loading("正在處理您的請求...", { id: "ai-processing" });
 
     try {
@@ -82,18 +87,31 @@ const AIModifier: React.FC<AIModifierProps> = ({ csvData, onDataUpdate }) => {
         ...csvData.data.map((row) => row.join(",")),
       ].join("\n");
 
+      // 系統提示詞
+      const systemContent = 
+        "你是一個CSV數據分析專家。你的任務是根據用戶的指令分析CSV數據。" + 
+        "請先判斷數據是否需要修改。如果需要修改，返回修改後的數據；如果不需要修改，返回原始數據。" + 
+        "在任何情況下，都要提供分析結果或建議。";
+
+      // 用戶提示詞
+      const userContent = 
+        `這是我的CSV數據:\n\n${csvString}\n\n` +
+        `請根據以下指令分析和處理這些數據:\n${prompt}\n\n` +
+        `請先判斷數據是否需要修改(needsModification)，` +
+        `提供明確的分析結果(message)，並返回適當的數據表格(table)。` +
+        `如果數據不需要修改，請在表格中返回原始數據。`;
+
       // 向 OpenAI API 發送請求
       const response = await client.responses.parse({
         model: model, // 使用用戶選擇的模型
         input: [
           {
             role: "system",
-            content:
-              "你是一個 CSV 數據處理專家。你的任務是根據用戶的指令修改 CSV 數據。始終以 CSV 格式返回完整的修改後數據，不要添加任何其他解釋。",
+            content: systemContent,
           },
           {
             role: "user",
-            content: `這是我的 CSV 數據:\n\n${csvString}\n\n我想要你按照以下指令修改這些數據:\n${prompt}\n\n請只返回修改後的完整 CSV 數據，不要包含任何其他文字。`,
+            content: userContent,
           },
         ],
         text: {
@@ -101,17 +119,25 @@ const AIModifier: React.FC<AIModifierProps> = ({ csvData, onDataUpdate }) => {
         },
       });
 
-      const csvTable = response.output_parsed;
+      const result = response.output_parsed;
 
-      if (csvTable) {
+      if (result) {
         // 解析 AI 返回的結果
-        if (csvTable.table.length > 0) {
-          const newHeaders = csvTable.table[0];
-          const newData = csvTable.table.slice(1).map((line) => line);
+        if (result.table.length > 0) {
+          // 保存分析結果
+          setAnalysisResult(result.message);
+          
+          // 根據AI判斷決定是否更新數據
+          if (result.needsModification) {
+            const newHeaders = result.table[0];
+            const newData = result.table.slice(1);
 
-          // 更新 CSV 數據
-          onDataUpdate({ headers: newHeaders, data: newData });
-          toast.success("CSV 數據已更新", { id: "ai-processing" });
+            // 更新 CSV 數據
+            onDataUpdate({ headers: newHeaders, data: newData });
+            toast.success("根據分析，CSV數據已更新", { id: "ai-processing" });
+          } else {
+            toast.success("數據分析完成，無需修改", { id: "ai-processing" });
+          }
         } else {
           toast.error("AI 返回了無效的數據格式", { id: "ai-processing" });
         }
@@ -130,23 +156,23 @@ const AIModifier: React.FC<AIModifierProps> = ({ csvData, onDataUpdate }) => {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+    <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
       <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-4 text-white">
-        <h2 className="text-lg font-medium flex items-center">
-          <svg className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <h2 className="flex items-center text-lg font-medium">
+          <svg className="mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
           AI 助手
         </h2>
         <p className="mt-1 text-sm text-purple-100 opacity-90">
-          使用AI幫助您快速處理和轉換CSV數據
+          使用AI幫助您分析和處理CSV數據
         </p>
       </div>
 
-      <div className="p-4 border-b border-gray-200">
+      <div className="border-b border-gray-200 p-4">
         <button
           onClick={() => setShowApiKeyInput(!showApiKeyInput)}
-          className="text-sm text-indigo-600 hover:text-indigo-800 flex items-center transition-colors focus:outline-none"
+          className="flex items-center text-sm text-indigo-600 transition-colors hover:text-indigo-800 focus:outline-none"
         >
           {showApiKeyInput ? "隱藏API設定" : "配置API密鑰"}
           <svg 
@@ -160,7 +186,7 @@ const AIModifier: React.FC<AIModifierProps> = ({ csvData, onDataUpdate }) => {
         </button>
         
         {showApiKeyInput && (
-          <div className="mt-3 p-4 bg-gray-50 rounded-md border border-gray-200">
+          <div className="mt-3 rounded-md border border-gray-200 bg-gray-50 p-4">
             <label className="mb-1 block text-sm font-medium text-gray-700">
               OpenAI API 密鑰
             </label>
@@ -169,7 +195,7 @@ const AIModifier: React.FC<AIModifierProps> = ({ csvData, onDataUpdate }) => {
               value={apiKey}
               onChange={handleApiKeyChange}
               placeholder="sk-..."
-              className="mb-2 w-full rounded-md border border-gray-300 p-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+              className="mb-2 w-full rounded-md border border-gray-300 p-2 transition-all focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
             <p className="text-xs text-gray-500">
               您的 API
@@ -182,19 +208,27 @@ const AIModifier: React.FC<AIModifierProps> = ({ csvData, onDataUpdate }) => {
 
       <div className="p-4">
         <label className="mb-1 block text-sm font-medium text-gray-700">
-          指示 AI 如何修改您的 CSV 數據
+          指示 AI 如何分析和處理您的 CSV 數據
         </label>
         <textarea
           value={prompt}
           onChange={handlePromptChange}
-          placeholder="例如：請將所有空單元格填充為 'N/A'、將第一列中的所有文本轉換為大寫、添加一個名為 '總計' 的新列並計算第 3 和第 4 列的總和..."
-          className="h-32 w-full rounded-md border border-gray-300 p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all text-gray-700"
+          placeholder="例如：檢查數據是否有空值、分析郵箱格式是否正確、檢查數值是否在合理範圍、自動填充空單元格、轉換格式..."
+          className="h-32 w-full rounded-md border border-gray-300 p-3 text-gray-700 transition-all focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
         />
+
+        {/* AI分析結果顯示區域 */}
+        {analysisResult && (
+          <div className="mt-4 rounded-md border border-indigo-100 bg-indigo-50 p-4">
+            <h3 className="mb-2 text-sm font-medium text-indigo-800">AI 分析結果：</h3>
+            <div className="whitespace-pre-wrap text-sm text-gray-700">{analysisResult}</div>
+          </div>
+        )}
 
         <div className="mt-4">
           <button
             onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
-            className="text-sm text-indigo-600 hover:text-indigo-800 flex items-center transition-colors focus:outline-none"
+            className="flex items-center text-sm text-indigo-600 transition-colors hover:text-indigo-800 focus:outline-none"
           >
             {showAdvancedSettings ? "隱藏進階設定" : "顯示進階設定"}
             <svg 
@@ -208,7 +242,7 @@ const AIModifier: React.FC<AIModifierProps> = ({ csvData, onDataUpdate }) => {
           </button>
           
           {showAdvancedSettings && (
-            <div className="mt-3 p-4 bg-gray-50 rounded-md border border-gray-200">
+            <div className="mt-3 rounded-md border border-gray-200 bg-gray-50 p-4">
               <label className="mb-1 block text-sm font-medium text-gray-700">
                 AI 模型
               </label>
@@ -217,7 +251,7 @@ const AIModifier: React.FC<AIModifierProps> = ({ csvData, onDataUpdate }) => {
                 value={model}
                 onChange={handleModelChange}
                 placeholder="輸入模型名稱，例如：gpt-4.1、gpt-4o、gpt-3.5-turbo"
-                className="mb-2 w-full rounded-md border border-gray-300 p-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                className="mb-2 w-full rounded-md border border-gray-300 p-2 transition-all focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
               <p className="text-xs text-gray-500">
                 輸入您想使用的 OpenAI 模型。預設為 gpt-4.1
@@ -230,11 +264,11 @@ const AIModifier: React.FC<AIModifierProps> = ({ csvData, onDataUpdate }) => {
           <button
             onClick={processWithAI}
             disabled={isProcessing}
-            className="w-full rounded-md bg-gradient-to-r from-purple-600 to-indigo-600 px-4 py-2 text-white font-medium transition-all hover:from-purple-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-50 disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center"
+            className="flex w-full items-center justify-center rounded-md bg-gradient-to-r from-purple-600 to-indigo-600 px-4 py-2 font-medium text-white transition-all hover:from-purple-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-50 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {isProcessing ? (
               <>
-                <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                <svg className="mr-2 -ml-1 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
@@ -242,10 +276,10 @@ const AIModifier: React.FC<AIModifierProps> = ({ csvData, onDataUpdate }) => {
               </>
             ) : (
               <>
-                <svg className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
-                使用 AI 處理
+                使用 AI 分析並處理
               </>
             )}
           </button>
