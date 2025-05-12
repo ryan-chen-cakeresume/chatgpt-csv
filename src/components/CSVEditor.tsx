@@ -1,5 +1,5 @@
 import Papa from "papaparse";
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import toast from "react-hot-toast";
 import AIModifier from "./AIModifier";
 import CSVTable from "./CSVTable";
@@ -24,32 +24,60 @@ const CSVEditor: React.FC = () => {
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [currentHistoryIndex, setCurrentHistoryIndex] = useState<number>(-1);
 
+  // 添加標記避免無限循環
+  const isInitializedRef = useRef(false);
+  const skipNextSaveRef = useRef(false);
+
   // 從 localStorage 恢復上次的 CSV 數據
   useEffect(() => {
+    // 如果已經初始化過，跳過
+    if (isInitializedRef.current) {
+      return;
+    }
+
     const savedData = localStorage.getItem("csvData");
     const savedFileName = localStorage.getItem("csvFileName");
 
     if (savedData) {
       try {
         const parsedData = JSON.parse(savedData);
+
+        // 設置標記，跳過下一次保存操作
+        skipNextSaveRef.current = true;
+
         setCsvData(parsedData);
         if (savedFileName) setFileName(savedFileName);
+
         // 初始化歷史記錄
         setHistory([
           { csvData: parsedData, fileName: savedFileName || "data.csv" },
         ]);
         setCurrentHistoryIndex(0);
+
         toast.success("已從本地存儲恢復數據");
       } catch (error) {
         console.error("恢復數據失敗:", error);
         toast.error("無法恢復數據");
+      } finally {
+        // 標記已完成初始化
+        isInitializedRef.current = true;
       }
+    } else {
+      // 即使沒有數據也標記為已初始化
+      isInitializedRef.current = true;
     }
   }, []);
 
   // 保存到 localStorage
   useEffect(() => {
-    if (csvData) {
+    // 跳過初始化過程中觸發的保存操作
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
+      return;
+    }
+
+    // 只有在初始化完成後才保存數據
+    if (isInitializedRef.current && csvData) {
       localStorage.setItem("csvData", JSON.stringify(csvData));
       localStorage.setItem("csvFileName", fileName);
     }
@@ -191,7 +219,6 @@ const CSVEditor: React.FC = () => {
     toast.success("CSV 文件已下載");
   };
 
-  // 創建3x3的CSV模板
   const createTemplate = () => {
     const templateHeaders = ["欄位1", "欄位2", "欄位3"];
     const templateData = [
@@ -202,7 +229,7 @@ const CSVEditor: React.FC = () => {
 
     const newCsvData = { headers: templateHeaders, data: templateData };
     updateDataWithHistory(newCsvData, "template.csv");
-    toast.success("已創建3x3 CSV模板");
+    toast.success("已創建 CSV 模板");
   };
 
   return (
